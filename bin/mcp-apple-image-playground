@@ -1,0 +1,35 @@
+#!/usr/bin/env bash
+set -euo pipefail
+IFS=$'\n\t'
+
+# ── mcp-apple-image-playground launcher ─────────────────────────────────────────────────
+# Resolves the package directory, ensures deps are installed, runs the MCP server.
+# Usage: npx mcp-apple-image-playground [extra python args]
+
+PACKAGE_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+PYTHON="${PYTHON:-python3}"
+HELPER="$PACKAGE_DIR/imagegen_helper"
+
+# ── Swift helper compilation (if source newer than binary) ───────────────────
+if [[ "$(uname)" == "Darwin" ]] && command -v swiftc &>/dev/null; then
+  SRC="$PACKAGE_DIR/imagegen_helper.swift"
+  if [[ -f "$SRC" ]] && { [[ ! -f "$HELPER" ]] || [[ "$SRC" -nt "$HELPER" ]]; }; then
+    echo "[mcp-apple-image-playground] Compiling Swift helper..."
+    swiftc "$SRC" -o "$HELPER" -O \
+      -framework ImagePlayground -framework AppKit -framework Vision -framework CoreImage \
+      2>/dev/null && echo "[mcp-apple-image-playground] Swift helper compiled ✓" \
+      || echo "[mcp-apple-image-playground] Swift compilation skipped (Apple Intelligence unavailable)"
+  fi
+fi
+
+# ── Ensure Python deps ───────────────────────────────────────────────────────
+if ! "$PYTHON" -c "import mcp" 2>/dev/null; then
+  echo "[mcp-apple-image-playground] Installing Python dependencies..."
+  "$PYTHON" -m pip install --quiet --no-warn-script-location 'mcp[cli]' pillow 2>/dev/null \
+    || { echo "[mcp-apple-image-playground] ERROR: pip install failed. Run manually:" >&2
+         echo "  $PYTHON -m pip install 'mcp[cli]' pillow" >&2
+         exit 1; }
+fi
+
+# ── Run the MCP server ───────────────────────────────────────────────────────
+exec "$PYTHON" "$PACKAGE_DIR/apple_intelligence_community_manager.py" "$@"
