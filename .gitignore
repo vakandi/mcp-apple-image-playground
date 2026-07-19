@@ -1,0 +1,23 @@
+# macOS
+.DS_Store
+__pycache__/
+*.pyc
+.momo
+
+# Binaries (recompile with `swiftc -O imagegen_helper.swift -o imagegen_helper`)
+# Uncomment below if you DON'T want to track the compiled binary:
+# imagegen_helper
+
+# OpenCode
+.omo/
+.codegraph/
+opencode.json
+
+# Environment
+.env
+*.env.local
+
+# Python
+.venv/
+venv/
+*.egg-info/
