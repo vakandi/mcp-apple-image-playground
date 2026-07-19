@@ -1,14 +1,20 @@
-# apple-image-mcp
+<p align="center">
+  <img src="assets/banners/banner.png" alt="Apple Image MCP — On-device AI image generation for macOS" width="100%">
+</p>
 
-> **On-device AI image generation for macOS. 17 tools. Zero API keys.**
->
-> Apple Intelligence (`ImageCreator`) + Pollinations.ai (photorealistic) in a single MCP server.
-> Auto-crops for 40+ social media platforms. Built for AI agents.
+<p align="center">
+  <strong>On-device AI image generation for macOS. 17 tools. Zero API keys.</strong><br>
+  Apple Intelligence (<code>ImageCreator</code>) + Pollinations.ai (photorealistic) in a single MCP server.<br>
+  Auto-crops for 40+ social media platforms. Built for AI agents.
+</p>
 
-[![MCP](https://img.shields.io/badge/MCP-compatible-blue)](https://modelcontextprotocol.io)
-[![macOS](https://img.shields.io/badge/macOS-15.4%2B-black?logo=apple)](https://www.apple.com/macos/)
-[![Python](https://img.shields.io/badge/Python-3.10%2B-3776AB?logo=python&logoColor=white)](https://python.org)
-[![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
+<p align="center">
+  <a href="https://modelcontextprotocol.io"><img src="https://img.shields.io/badge/MCP-compatible-blue" alt="MCP"></a>
+  <a href="https://www.apple.com/macos/"><img src="https://img.shields.io/badge/macOS-15.4%2B-black?logo=apple" alt="macOS"></a>
+  <a href="https://python.org"><img src="https://img.shields.io/badge/Python-3.10%2B-3776AB?logo=python&logoColor=white" alt="Python"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-green.svg" alt="License: MIT"></a>
+  <a href="https://github.com/vakandi/apple-image-mcp/releases"><img src="https://img.shields.io/badge/version-1.0.0-orange" alt="Version"></a>
+</p>
 
 ---
 
@@ -62,32 +68,33 @@ pip install "mcp[cli]" pillow
 
 | Tool | Description |
 |------|-------------|
-| `generate_image` | Generate from text prompt. Engine: `apple_intelligence` or `pollinations` |
+| `generate_image` | Generate from text prompt. Engine: `apple` or `pollinations` |
 | `generate_social_pack` | One prompt → multiple platform-sized crops (Instagram, Twitter, LinkedIn…) |
-| `generate_blog_post_images` | Hero image + social thumbnails for blog content |
+| `generate_bundle` | Generate for a predefined bundle (e.g. `full_social`, `blog_set`) |
 | `generate_batch` | Generate multiple images from a list of prompts |
-| `generate_with_style` | Generate with a specific Apple style: `illustration`, `sketch`, `animation` |
 
 ### Image Processing
 
 | Tool | Description |
 |------|-------------|
-| `crop_for_platform` | Smart center-crop to any platform preset (40+ available) |
 | `add_text_overlay` | Add text with custom font, position, color, shadow |
-| `add_watermark` | Brand watermark (text or logo) with opacity control |
-| `apply_filter` | Blur, sharpen, brightness, contrast, sepia, noir, chrome… |
-| `resize` | Resize to exact dimensions or scale percentage |
-| `create_collage` | Combine multiple images into a grid layout |
+| `add_watermark` | Brand watermark with opacity control |
+| `create_gradient` | Generate gradient backgrounds (vertical, horizontal, diagonal) |
+| `create_text_post` | Ready-to-post text image (quote, announcement, tip) |
+| `apply_filter` | Blur, sharpen, brightness, contrast, sepia, noir |
+| `smart_crop` | Face-aware crop using Apple's Vision framework |
+| `crop_image` | Crop existing image to multiple platform sizes |
+| `resize_image` | Resize to exact dimensions or scale factor |
 
 ### Discovery
 
 | Tool | Description |
 |------|-------------|
-| `list_styles` | Show available Apple styles on this machine |
 | `list_engines` | Check which engines are available (Apple + Pollinations) |
-| `list_platform_presets` | All 40+ platform presets with exact dimensions |
-| `list_filters` | Available image filters |
-| `get_image_info` | Image metadata (dimensions, format, file size) |
+| `list_styles` | Show available Apple Intelligence styles on this machine |
+| `list_presets` | All 40+ platform presets with exact dimensions |
+| `list_bundles` | Predefined bundles (full_social, instagram_set, blog_set…) |
+| `detect_faces` | Detect faces using Apple's Vision framework |
 
 ---
 
@@ -135,7 +142,8 @@ Full list: call `list_platform_presets` on the running server.
 ```python
 generate_social_pack(
     prompt="a cozy coffee shop in autumn, warm colors",
-    platforms="instagram_post,twitter_post,linkedin_post",
+    platforms=["instagram_post", "twitter_post", "linkedin_post"],
+    engine="apple",
     style="illustration"
 )
 # → 3 images, each cropped to the perfect platform size
@@ -153,16 +161,32 @@ generate_image(
 # → photorealistic image, no API key needed
 ```
 
-### Blog hero + social thumbnails
+### Generate a bundle for your blog
 
 ```python
-generate_blog_post_images(
+generate_bundle(
     prompt="a rocket launching into a starry sky",
-    platforms="blog_header,twitter_card,linkedin_post"
+    bundle="blog_set",
+    engine="pollinations"
 )
+# → 5 images: blog_header, blog_inline, blog_thumbnail, og_image, square_thumbnail
 ```
 
-### Add text overlay for social
+### Create a text post for social
+
+```python
+create_text_post(
+    text="50% OFF everything this weekend",
+    width=1080,
+    height=1080,
+    bg_color="#1a1a2e",
+    font_color="#FFFFFF",
+    gradient=True
+)
+# → ready-to-post text image with gradient background
+```
+
+### Add text overlay to an image
 
 ```python
 add_text_overlay(
@@ -170,7 +194,8 @@ add_text_overlay(
     text="50% OFF",
     position="center",
     font_size=72,
-    color="#FF0000"
+    font_color="#FF0000",
+    bg_color="#000000"
 )
 ```
 
@@ -258,9 +283,17 @@ The Swift helper binary (`imagegen_helper`) is a thin wrapper around Apple's `Im
 
 ```
 apple-image-mcp/
-├── apple_intelligence_community_manager.py  # MCP server (17 tools)
-├── imagegen_helper.swift                    # Swift → ImageCreator bridge
-├── imagegen_helper                          # Compiled arm64 binary
+├── apple_intelligence/                  # Python package
+│   ├── __init__.py                     # Package entry point
+│   ├── server.py                       # 17 MCP tool definitions
+│   ├── engines.py                      # Apple Intelligence + Pollinations engines
+│   ├── processing.py                   # Image crop, resize, font utilities
+│   ├── platforms.py                    # 40+ platform presets & bundles
+│   └── response.py                     # Structured response helpers
+├── apple_intelligence_community_manager.py  # MCP server entry point
+├── imagegen_helper.swift               # Swift → ImageCreator bridge
+├── imagegen_helper                     # Compiled arm64 binary
+├── assets/banners/banner.png           # Repo banner (generated with this MCP)
 ├── README.md
 ├── LICENSE
 └── .gitignore
