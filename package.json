@@ -1,6 +1,6 @@
 {
   "name": "mcp-apple-image-playground",
-  "version": "1.1.0",
+  "version": "1.1.2",
   "description": "AI image generation MCP server — Apple Intelligence (on-device) + Pollinations.ai (cloud). 17 tools, 40+ social presets, zero API keys. Plug-and-play for Claude Desktop, Cursor, OpenCode.",
   "keywords": [
     "mcp",
@@ -22,11 +22,11 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "https://github.com/vakandi/apple-image-mcp.git"
+    "url": "https://github.com/vakandi/mcp-apple-image-playground.git"
   },
-  "homepage": "https://github.com/vakandi/apple-image-mcp#readme",
+  "homepage": "https://github.com/vakandi/mcp-apple-image-playground#readme",
   "bugs": {
-    "url": "https://github.com/vakandi/apple-image-mcp/issues"
+    "url": "https://github.com/vakandi/mcp-apple-image-playground/issues"
   },
   "engines": {
     "node": ">=18"
