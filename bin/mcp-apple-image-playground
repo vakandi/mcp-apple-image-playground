@@ -1,35 +1,163 @@
-#!/usr/bin/env bash
-set -euo pipefail
-IFS=$'\n\t'
+#!/usr/bin/env node
+/**
+ * mcp-apple-image-playground — MCP server launcher
+ *
+ * Works with: npx mcp-apple-image-playground
+ *             npm install -g mcp-apple-image-playground
+ *             Claude Desktop / Cursor / OpenCode MCP config
+ *
+ * Flow:
+ *   1. Compile Swift helper (macOS only, one-time)
+ *   2. Ensure Python deps (mcp[cli], pillow)
+ *   3. Start the MCP stdio server
+ */
+"use strict";
 
-# ── mcp-apple-image-playground launcher ─────────────────────────────────────────────────
-# Resolves the package directory, ensures deps are installed, runs the MCP server.
-# Usage: npx mcp-apple-image-playground [extra python args]
+const { execSync, spawn } = require("child_process");
+const path = require("path");
+const fs = require("fs");
 
-PACKAGE_DIR="$(cd "$(dirname "$0")/.." && pwd)"
-PYTHON="${PYTHON:-python3}"
-HELPER="$PACKAGE_DIR/imagegen_helper"
+const ROOT = path.resolve(__dirname, "..");
+const PYTHON_SCRIPT = path.join(ROOT, "apple_intelligence_community_manager.py");
+const SWIFT_SRC = path.join(ROOT, "imagegen_helper.swift");
+const SWIFT_BIN = path.join(ROOT, "imagegen_helper");
 
-# ── Swift helper compilation (if source newer than binary) ───────────────────
-if [[ "$(uname)" == "Darwin" ]] && command -v swiftc &>/dev/null; then
-  SRC="$PACKAGE_DIR/imagegen_helper.swift"
-  if [[ -f "$SRC" ]] && { [[ ! -f "$HELPER" ]] || [[ "$SRC" -nt "$HELPER" ]]; }; then
-    echo "[mcp-apple-image-playground] Compiling Swift helper..."
-    swiftc "$SRC" -o "$HELPER" -O \
-      -framework ImagePlayground -framework AppKit -framework Vision -framework CoreImage \
-      2>/dev/null && echo "[mcp-apple-image-playground] Swift helper compiled ✓" \
-      || echo "[mcp-apple-image-playground] Swift compilation skipped (Apple Intelligence unavailable)"
-  fi
-fi
+function log(msg) {
+  process.stderr.write(`\x1b[36m[mcp-apple-image-playground]\x1b[0m ${msg}\n`);
+}
 
-# ── Ensure Python deps ───────────────────────────────────────────────────────
-if ! "$PYTHON" -c "import mcp" 2>/dev/null; then
-  echo "[mcp-apple-image-playground] Installing Python dependencies..."
-  "$PYTHON" -m pip install --quiet --no-warn-script-location 'mcp[cli]' pillow 2>/dev/null \
-    || { echo "[mcp-apple-image-playground] ERROR: pip install failed. Run manually:" >&2
-         echo "  $PYTHON -m pip install 'mcp[cli]' pillow" >&2
-         exit 1; }
-fi
+function warn(msg) {
+  process.stderr.write(`\x1b[33m[mcp-apple-image-playground]\x1b[0m ${msg}\n`);
+}
 
-# ── Run the MCP server ───────────────────────────────────────────────────────
-exec "$PYTHON" "$PACKAGE_DIR/apple_intelligence_community_manager.py" "$@"
+// ── Find python3 ────────────────────────────────────────────────────────────
+function findPython() {
+  const candidates = ["python3", "python"];
+  for (const cmd of candidates) {
+    try {
+      const ver = execSync(`${cmd} -c "import sys; print(sys.version_info[:2])"`, {
+        encoding: "utf-8",
+        timeout: 5000,
+        stdio: ["pipe", "pipe", "pipe"],
+      }).trim();
+      const [major, minor] = ver.replace(/[()]/g, "").split(",").map(Number);
+      if (major >= 3 && minor >= 10) {
+        return cmd;
+      }
+    } catch {
+      continue;
+    }
+  }
+  return null;
+}
+
+// ── Compile Swift helper (macOS only) ───────────────────────────────────────
+function compileSwift() {
+  if (process.platform !== "darwin") return;
+  if (!fs.existsSync(SWIFT_SRC)) return;
+
+  // Already compiled and current?
+  if (fs.existsSync(SWIFT_BIN)) {
+    const srcMtime = fs.statSync(SWIFT_SRC).mtimeMs;
+    const binMtime = fs.statSync(SWIFT_BIN).mtimeMs;
+    if (binMtime >= srcMtime) return;
+  }
+
+  try {
+    execSync("which swiftc", { stdio: "ignore", timeout: 3000 });
+  } catch {
+    warn("swiftc not found — Apple Intelligence engine unavailable. Pollinations works.");
+    return;
+  }
+
+  log("Compiling Swift helper (one-time)...");
+  try {
+    execSync(
+      `swiftc "${SWIFT_SRC}" -o "${SWIFT_BIN}" -O ` +
+        `-framework ImagePlayground -framework AppKit -framework Vision -framework CoreImage`,
+      { stdio: "pipe", timeout: 60_000 }
+    );
+    log("Swift helper compiled ✓");
+  } catch {
+    warn("Swift compilation skipped — Apple Intelligence engine unavailable.");
+  }
+}
+
+// ── Ensure Python dependencies ──────────────────────────────────────────────
+function ensurePythonDeps(python) {
+  try {
+    execSync(`${python} -c "import mcp; import PIL"`, {
+      stdio: "ignore",
+      timeout: 5000,
+    });
+    return true;
+  } catch {
+    // deps missing, install them
+  }
+
+  log("Installing Python dependencies (first run)...");
+  try {
+    execSync(
+      `${python} -m pip install --quiet --no-warn-script-location "mcp[cli]" pillow`,
+      { stdio: "pipe", timeout: 120_000 }
+    );
+    log("Python dependencies installed ✓");
+    return true;
+  } catch (e) {
+    warn(
+      "pip install failed. Install manually:\n" +
+        `  ${python} -m pip install "mcp[cli]" pillow`
+    );
+    return false;
+  }
+}
+
+// ── Main ────────────────────────────────────────────────────────────────────
+function main() {
+  // 1. Find Python
+  const python = findPython();
+  if (!python) {
+    process.stderr.write(
+      "\x1b[31m[mcp-apple-image-playground]\x1b[0m " +
+        "Python 3.10+ not found. Install Python: https://python.org\n"
+    );
+    process.exit(1);
+  }
+
+  // 2. Compile Swift helper (fast no-op if already done)
+  compileSwift();
+
+  // 3. Ensure Python deps (fast no-op if already installed)
+  if (!ensurePythonDeps(python)) {
+    process.exit(1);
+  }
+
+  // 4. Verify entry point exists
+  if (!fs.existsSync(PYTHON_SCRIPT)) {
+    process.stderr.write(
+      `\x1b[31m[mcp-apple-image-playground]\x1b[0m ` +
+        `Server entry point not found: ${PYTHON_SCRIPT}\n`
+    );
+    process.exit(1);
+  }
+
+  // 5. Spawn the Python MCP server on stdio
+  const child = spawn(python, [PYTHON_SCRIPT, ...process.argv.slice(2)], {
+    stdio: ["inherit", "inherit", "inherit"],
+    cwd: ROOT,
+    env: process.env,
+  });
+
+  child.on("error", (err) => {
+    process.stderr.write(
+      `\x1b[31m[mcp-apple-image-playground]\x1b[0m Failed to start: ${err.message}\n`
+    );
+    process.exit(1);
+  });
+
+  child.on("exit", (code) => {
+    process.exit(code ?? 1);
+  });
+}
+
+main();

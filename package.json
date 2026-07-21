@@ -1,7 +1,7 @@
 {
   "name": "mcp-apple-image-playground",
-  "version": "1.0.0",
-  "description": "On-device AI image generation MCP for macOS — Apple Intelligence + Pollinations.ai, 17 tools, 40+ social presets, zero API keys",
+  "version": "1.1.0",
+  "description": "AI image generation MCP server — Apple Intelligence (on-device) + Pollinations.ai (cloud). 17 tools, 40+ social presets, zero API keys. Plug-and-play for Claude Desktop, Cursor, OpenCode.",
   "keywords": [
     "mcp",
     "model-context-protocol",
@@ -12,7 +12,11 @@
     "pollinations",
     "social-media",
     "content-creation",
-    "fastmcp"
+    "fastmcp",
+    "claude-desktop",
+    "cursor",
+    "opencode",
+    "npx"
   ],
   "author": "vakandi",
   "license": "MIT",
@@ -27,6 +31,9 @@
   "engines": {
     "node": ">=18"
   },
+  "publishConfig": {
+    "access": "public"
+  },
   "bin": {
     "mcp-apple-image-playground": "bin/mcp-apple-image-playground"
   },
@@ -35,17 +42,12 @@
     "postinstall.js",
     "imagegen_helper.swift",
     "apple_intelligence/",
+    "!apple_intelligence/__pycache__/",
     "apple_intelligence_community_manager.py",
     "README.md",
     "LICENSE"
   ],
   "scripts": {
     "postinstall": "node postinstall.js"
-  },
-  "os": [
-    "darwin"
-  ],
-  "cpu": [
-    "arm64"
-  ]
+  }
 }

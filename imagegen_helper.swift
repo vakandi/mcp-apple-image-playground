@@ -3,6 +3,7 @@ import ImagePlayground
 import AppKit
 import Vision
 import CoreImage
+import Combine
 
 struct Request: Codable {
     let mode: String
@@ -107,6 +108,106 @@ func generateImages(prompt: String, style: String, count: Int, outputDir: String
         return Response(success: false, images: nil, availableStyles: nil, imageInfo: nil,
                         error: "\(error)")
     }
+}
+
+// MARK: - ChatGPT External Provider Generation (via ImagePlaygroundViewController)
+
+func generateChatGPT(prompt: String, outputDir: String, prefix: String) async -> Response {
+    let semaphore = DispatchSemaphore(value: 0)
+    var resultResponse: Response = Response(success: false, images: nil, availableStyles: nil,
+                                            imageInfo: nil, error: "Generation did not complete")
+    
+    await MainActor.run {
+        let vc = ImagePlaygroundViewController()
+        vc.concepts = [.text(prompt)]
+        if #available(macOS 26.0, *) {
+            vc.allowedGenerationStyles = [.externalProvider]
+        }
+        
+        class DelegateHandler: NSObject, ImagePlaygroundViewController.Delegate {
+            let outputDir: String
+            let prefix: String
+            let semaphore: DispatchSemaphore
+            var result: Response
+            
+            init(outputDir: String, prefix: String, semaphore: DispatchSemaphore) {
+                self.outputDir = outputDir
+                self.prefix = prefix
+                self.semaphore = semaphore
+                self.result = Response(success: false, images: nil, availableStyles: nil,
+                                       imageInfo: nil, error: "Generation did not complete")
+            }
+            
+            func imagePlaygroundViewController(_ controller: ImagePlaygroundViewController,
+                                               didCreateImageAt imageURL: URL) {
+                do {
+                    try FileManager.default.createDirectory(atPath: outputDir, withIntermediateDirectories: true)
+                    let filename = "\(prefix)_chatgpt_0.png"
+                    let destPath = "\(outputDir)/\(filename)"
+                    if FileManager.default.fileExists(atPath: destPath) {
+                        try FileManager.default.removeItem(atPath: destPath)
+                    }
+                    try FileManager.default.copyItem(at: imageURL, to: URL(fileURLWithPath: destPath))
+                    result = Response(success: true,
+                                      images: [ResultImage(path: destPath, index: 0)],
+                                      availableStyles: nil, imageInfo: nil, error: nil)
+                } catch {
+                    result = Response(success: false, images: nil, availableStyles: nil,
+                                      imageInfo: nil, error: "Failed to copy generated image: \(error)")
+                }
+                semaphore.signal()
+            }
+            
+            func imagePlaygroundViewControllerDidCancel(_ controller: ImagePlaygroundViewController) {
+                result = Response(success: false, images: nil, availableStyles: nil,
+                                  imageInfo: nil, error: "User cancelled generation")
+                semaphore.signal()
+            }
+        }
+        
+        let handler = DelegateHandler(outputDir: outputDir, prefix: prefix, semaphore: semaphore)
+        vc.delegate = handler
+        
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 600, height: 600),
+                              styleMask: [.titled, .closable],
+                              backing: .buffered, defer: false)
+        window.title = "Image Playground — ChatGPT"
+        window.contentViewController = vc
+        window.center()
+        window.makeKeyAndOrderFront(nil)
+        NSApp.activate(ignoringOtherApps: true)
+        
+        objc_setAssociatedObject(window, "handler", handler, .OBJC_ASSOCIATION_RETAIN)
+        objc_setAssociatedObject(vc, "window", window, .OBJC_ASSOCIATION_RETAIN)
+        
+        DispatchQueue.main.asyncAfter(deadline: .now() + 5) {
+            let script = """
+            tell application "System Events"
+                tell process "ImageGenHelper"
+                    try
+                        click button 1 of window 1
+                    end try
+                end tell
+            end tell
+            """
+            if let appleScript = NSAppleScript(source: script) {
+                var error: NSDictionary?
+                appleScript.executeAndReturnError(&error)
+            }
+        }
+        
+        DispatchQueue.main.asyncAfter(deadline: .now() + 90) {
+            if semaphore.wait(timeout: .now()) == .timedOut {
+                resultResponse = Response(success: false, images: nil, availableStyles: nil,
+                                          imageInfo: nil, error: "ChatGPT generation timed out (90s)")
+                window.close()
+                semaphore.signal()
+            }
+        }
+    }
+    
+    semaphore.wait()
+    return resultResponse
 }
 
 // MARK: - Vision: Face Detection
@@ -340,6 +441,14 @@ func handleRequest(_ request: Request) async -> Response {
                                      outputDir: request.outputDir ?? NSTemporaryDirectory(),
                                      prefix: request.prefix ?? "aigen",
                                      inputImage: request.inputImage)
+    case "generate-chatgpt":
+        guard let prompt = request.prompt, !prompt.isEmpty else {
+            return Response(success: false, images: nil, availableStyles: nil,
+                            imageInfo: nil, error: "Missing 'prompt'.")
+        }
+        return await generateChatGPT(prompt: prompt,
+                                     outputDir: request.outputDir ?? NSTemporaryDirectory(),
+                                     prefix: request.prefix ?? "aigen")
     case "detect-faces":
         guard let path = request.inputPath else {
             return Response(success: false, images: nil, availableStyles: nil,
@@ -434,6 +543,15 @@ if CommandLine.arguments.count <= 1 {
                                       outputDir: nil, prefix: nil, inputPath: nil, inputImage: nil,
                                       targetWidth: nil, targetHeight: nil, outputPath: nil,
                                       filter: nil, intensity: nil)
+                } else if self.mode == "generate-chatgpt" {
+                    let prompt = ProcessInfo.processInfo.environment["IMAGE_HELPER_PROMPT"] ?? ""
+                    let outputDir = ProcessInfo.processInfo.environment["IMAGE_HELPER_DIR"] ?? NSTemporaryDirectory()
+                    let prefix = ProcessInfo.processInfo.environment["IMAGE_HELPER_PREFIX"] ?? "chatgpt"
+                    request = Request(mode: "generate-chatgpt", prompt: prompt, style: nil, count: nil,
+                                      outputDir: outputDir, prefix: prefix,
+                                      inputPath: nil, inputImage: nil,
+                                      targetWidth: nil, targetHeight: nil,
+                                      outputPath: nil, filter: nil, intensity: nil)
                 } else {
                     let style = ProcessInfo.processInfo.environment["IMAGE_HELPER_STYLE"] ?? "illustration"
                     let count = Int(ProcessInfo.processInfo.environment["IMAGE_HELPER_COUNT"] ?? "1") ?? 1

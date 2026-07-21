@@ -1,5 +1,4 @@
-"""MCP tool definitions — 17 tools for image generation and processing."""
-import json
+"""MCP tool definitions for Apple Image Playground — fully on-device via Shortcuts."""
 import logging
 from datetime import datetime
 from pathlib import Path
@@ -8,11 +7,11 @@ from mcp.server.fastmcp import FastMCP
 from PIL import Image
 
 from .engines import (
-    HELPER_BINARY,
-    _run_helper,
-    _generate_pollinations,
+    generate_image as _generate_image,
+    AVAILABLE_STYLES,
+    _run_swift_helper,
 )
-from .platforms import APPLE_STYLES, FILTERS, PLATFORM_PRESETS, PLATFORM_BUNDLES
+from .platforms import PLATFORM_PRESETS, PLATFORM_BUNDLES
 from .processing import (
     _hex_to_rgb,
     _get_font,
@@ -30,14 +29,13 @@ from .response import (
 logger = logging.getLogger("apple_intelligence")
 
 mcp = FastMCP(
-    "apple_intelligence",
+    "apple_image_playground",
     instructions=(
-        "Image generation MCP for community managers. Two engines: "
-        "apple_intelligence (on-device stylized art) and pollinations (cloud photorealistic). "
-        "40+ platform presets, text overlay, watermark, smart crop, batch generation. "
-        "All responses include 'success', 'path', and 'next_steps' fields. "
-        "Always check 'success' before acting on results. "
-        "Use 'list_engines' first to see what's available on this machine."
+        "Apple Image Playground MCP — fully on-device image generation via macOS Shortcuts. "
+        "Uses GenerateImageIntent for on-device styles (animation, illustration, sketch) "
+        "and ChatGPT external styles (oil_painting, watercolor, vector, anime, print). "
+        "40+ platform presets, text overlay, watermark, crop, batch generation. "
+        "Zero API keys, zero cloud calls."
     ),
 )
 
@@ -50,35 +48,30 @@ mcp = FastMCP(
 @mcp.tool()
 def list_engines() -> dict:
     """
-    List available image generation engines. Call this FIRST to know what's available.
-    Returns engine capabilities, availability status, and recommendations.
+    List available image generation engines. Apple Image Playground runs fully
+    on-device via Shortcuts.app — no API keys, no cloud calls.
     """
-    apple_ok = HELPER_BINARY.exists()
+    import subprocess
+    shortcuts_ok = subprocess.run(
+        ["shortcuts", "list"], capture_output=True, text=True, timeout=5,
+    ).returncode == 0
     return {
         "success": True,
         "engines": {
-            "apple_intelligence": {
-                "available": apple_ok,
+            "shortcuts": {
+                "available": shortcuts_ok,
                 "type": "on-device",
-                "styles": APPLE_STYLES if apple_ok else [],
-                "description": "Stylized art (animation/illustration/sketch/emoji). Local, private.",
-                "note": "Compile Swift helper to enable." if not apple_ok else None,
-            },
-            "pollinations": {
-                "available": True,
-                "type": "cloud",
-                "styles": ["photorealistic", "any"],
-                "description": "Photorealistic + artistic via Flux model. Free, no API key.",
+                "styles": AVAILABLE_STYLES if shortcuts_ok else [],
+                "description": (
+                    "Image Playground via GenerateImageIntent. "
+                    "On-device: animation, illustration, sketch. "
+                    "ChatGPT external: oil_painting, watercolor, vector, anime, print."
+                ),
             },
         },
-        "recommendation": (
-            "Use apple_intelligence for stylized brand art. "
-            "Use pollinations for photorealistic scenes, product shots, people."
-        ),
         "next_steps": [
-            "Apple Intelligence available — use generate_image(engine='apple') for stylized art",
-            "Pollinations available — use generate_image(engine='pollinations') for photorealistic",
-            "Call list_styles() to see available Apple Intelligence styles",
+            "Use generate_image(prompt='...', style='illustration') to generate",
+            "Use list_styles() to see all available styles",
         ],
     }
 
@@ -111,13 +104,19 @@ def list_bundles() -> dict:
 
 @mcp.tool()
 def list_styles() -> dict:
-    """List Apple Intelligence Image Playground styles available on this Mac."""
-    result = _run_helper({"mode": "list-styles"})
-    result["next_steps"] = [
-        f"Use style parameter with generate_image(engine='apple', style='<style>')",
-        "Available styles: " + ", ".join(result.get("styles", APPLE_STYLES)),
-    ]
-    return result
+    """List all available Apple Image Playground styles from the ImagePlayground API."""
+    result = _run_swift_helper("list-styles")
+    on_device = result.get("availableStyles", []) if result.get("success") else []
+    chatgpt = ["oil_painting", "watercolor", "vector", "anime", "print"]
+    return {
+        "success": True,
+        "on_device": on_device,
+        "chatgpt_external": chatgpt,
+        "styles": on_device + chatgpt,
+        "next_steps": [
+            "Use any style key with generate_image(prompt='...', style='<style>')",
+        ],
+    }
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -128,121 +127,74 @@ def list_styles() -> dict:
 @mcp.tool()
 def generate_image(
     prompt: str,
-    engine: str = "pollinations",
     style: str = "illustration",
-    count: int = 1,
-    width: int = 1024,
-    height: int = 1024,
-    seed: int | None = None,
     output_dir: str | None = None,
     file_prefix: str = "aigen",
     absolute_path: str | None = None,
-    input_image: str | None = None,
 ) -> dict:
     """
-    Generate images using Apple Intelligence or Pollinations.ai.
-
-    Apple Intelligence: on-device stylized art (animation, illustration, sketch, emoji).
-    NOT photorealistic — use engine='pollinations' for that.
-
-    Pollinations.ai: cloud photorealistic via Flux model. Free, no API key.
+    Generate an image using Apple Image Playground via Shortcuts.app.
+    Fully on-device — no API keys, no cloud calls.
 
     Args:
-        prompt: Text description. Keep concrete and single-subject for Apple.
-        engine: "apple" (stylized) or "pollinations" (photorealistic).
-        style: Apple style (ignored for pollinations). One of: animation, illustration, sketch, emoji, messages-background.
-        count: Number of variations (1-4, Apple only).
-        width: Output width (Pollinations only, max ~2048).
-        height: Output height (Pollinations only, max ~2048).
-        seed: Optional seed for reproducibility (Pollinations only).
+        prompt: Text description of the image to generate.
+        style: One of: animation, illustration, sketch, oil_painting, watercolor, vector, anime, print.
         output_dir: Save folder. Default: ~/Pictures/AI-Generated.
         file_prefix: Filename prefix.
         absolute_path: Full file path to force output location. ERROR if file exists.
-        input_image: Path to an existing image to use as Apple Image Playground input (inpainting/transformation).
     """
+    if style not in AVAILABLE_STYLES:
+        return _fail(f"Invalid style '{style}'. Use list_styles() to see available styles.")
+
     try:
         forced = _check_absolute_path(absolute_path)
     except FileExistsError as e:
         return _fail(str(e))
 
-    if engine == "apple":
-        if style not in APPLE_STYLES:
-            return _fail(f"Invalid style '{style}'. Must be one of: {APPLE_STYLES}")
-        if forced:
-            out_dir = str(Path(forced).parent)
-            prefix = Path(forced).stem
-        else:
-            out_dir = str(Path(output_dir) if output_dir else DEFAULT_OUTPUT_DIR)
-            prefix = file_prefix
-        result = _run_helper({
-            "mode": "generate", "prompt": prompt, "style": style,
-            "count": count, "outputDir": out_dir, "prefix": prefix,
-            "inputImage": input_image,
-        })
-        if result.get("success") and result.get("images"):
-            img_path = result["images"][0].get("path", "")
-            if forced and result["images"]:
-                actual = Path(result["images"][0]["path"])
-                if actual != Path(forced):
-                    actual.rename(forced)
-                    img_path = str(forced)
-            return _ok(img_path, style=style, engine="apple", count=len(result["images"]))
-        return result
-
-    elif engine == "pollinations":
-        if forced:
-            save_path = str(forced)
-        else:
-            out_dir = Path(output_dir) if output_dir else DEFAULT_OUTPUT_DIR
-            out_dir.mkdir(parents=True, exist_ok=True)
-            ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-            slug = prompt[:40].lower().replace(" ", "_").replace("/", "_")
-            filename = f"{file_prefix}_{slug}_{ts}.png"
-            save_path = str(out_dir / filename)
-        result = _generate_pollinations(prompt, width, height, seed, output_path=save_path)
-        if result.get("success"):
-            result["style"] = "photorealistic"
-            result["engine"] = "pollinations"
-        return result
-
+    if forced:
+        out_path = str(forced)
     else:
-        return _fail(f"Unknown engine '{engine}'. Use 'apple' or 'pollinations'.")
+        out_dir = Path(output_dir) if output_dir else DEFAULT_OUTPUT_DIR
+        out_dir.mkdir(parents=True, exist_ok=True)
+        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+        slug = prompt[:40].lower().replace(" ", "_").replace("/", "_")
+        out_path = str(out_dir / f"{file_prefix}_{slug}_{ts}.png")
+
+    result = _generate_image(prompt=prompt, style=style, output_path=out_path)
+    return result
 
 
 @mcp.tool()
 def generate_social_pack(
     prompt: str,
     platforms: list[str],
-    engine: str = "pollinations",
     style: str = "illustration",
     crop_mode: str = "center",
     bg_color: str = "#000000",
     output_dir: str | None = None,
     file_prefix: str = "post",
     absolute_path: str | None = None,
-    input_image: str | None = None,
 ) -> dict:
     """
-    Generate one master image, then produce ready-to-post crops for every platform.
-    The main tool for "give me images for this social media post."
+    Generate one master image via Image Playground, then crop to multiple platform sizes.
 
     Args:
         prompt: Image concept.
         platforms: Preset keys (e.g. ["instagram_post", "twitter_post"]).
-        engine: "apple" (stylized), "pollinations" (photorealistic).
-        style: Apple style (ignored for pollinations).
+        style: Image Playground style.
         crop_mode: "center" (crop+resize), "letterbox" (pad, no crop), or "smart" (face-aware).
-        bg_color: Hex color for letterbox padding. Default: #000000.
+        bg_color: Hex color for letterbox padding.
         output_dir: Save folder.
         file_prefix: Filename prefix.
         absolute_path: Full file path for the master image. ERROR if file exists.
-        input_image: Path to an existing image to use as Apple Image Playground input.
     """
     unknown = [p for p in platforms if p not in PLATFORM_PRESETS]
     if unknown:
-        return _fail(f"Unknown platforms: {unknown}. Use list_presets() to see available presets.")
+        return _fail(f"Unknown platforms: {unknown}. Use list_presets().")
     if not platforms:
-        return _fail("Need at least one platform. Use list_presets() to see options.")
+        return _fail("Need at least one platform. Use list_presets().")
+    if style not in AVAILABLE_STYLES:
+        return _fail(f"Invalid style '{style}'. Use list_styles().")
 
     try:
         forced = _check_absolute_path(absolute_path)
@@ -252,38 +204,21 @@ def generate_social_pack(
     out_dir = Path(output_dir) if output_dir else DEFAULT_OUTPUT_DIR
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    sizes = [PLATFORM_PRESETS[p] for p in platforms]
-    max_w = max(s[0] for s in sizes)
-    max_h = max(s[1] for s in sizes)
-
     master_path: Path | None = None
-
-    if engine == "apple" and HELPER_BINARY.exists():
-        if forced:
-            gen = _run_helper({
-                "mode": "generate", "prompt": prompt, "style": style, "count": 1,
-                "outputDir": str(forced.parent), "prefix": forced.stem,
-                "inputImage": input_image,
-            })
+    if forced:
+        gen = _generate_image(prompt=prompt, style=style, output_path=str(forced))
+        if gen.get("success") and gen.get("path"):
+            master_path = Path(gen["path"])
         else:
-            gen = _run_helper({
-                "mode": "generate", "prompt": prompt, "style": style, "count": 1,
-                "outputDir": str(out_dir), "prefix": f"{file_prefix}_master",
-                "inputImage": input_image,
-            })
-        if gen.get("success") and gen.get("images"):
-            master_path = Path(gen["images"][0]["path"])
+            return gen
+    else:
+        master_file = out_dir / f"{file_prefix}_master_{datetime.now().strftime('%Y%m%d_%H%M%S')}.png"
+        gen = _generate_image(prompt=prompt, style=style, output_path=str(master_file))
+        if gen.get("success") and gen.get("path"):
+            master_path = Path(gen["path"])
         else:
             return gen
 
-    if master_path is None:
-        save = str(forced) if forced else str(out_dir / f"{file_prefix}_master_{datetime.now().strftime('%Y%m%d_%H%M%S')}.png")
-        gen = _generate_pollinations(prompt, max_w, max_h, output_path=save)
-        if not gen.get("success"):
-            return gen
-        master_path = Path(save)
-
-    # Crop to each platform
     master_img = Image.open(master_path).convert("RGB")
     platform_paths: dict[str, str] = {}
 
@@ -292,28 +227,18 @@ def generate_social_pack(
         try:
             if crop_mode == "letterbox":
                 cropped = _letterbox(master_img, size, bg_color)
-            elif crop_mode == "smart" and HELPER_BINARY.exists():
-                tmp_in = f"/tmp/_smcrop_src_{platform}.png"
-                master_img.save(tmp_in, "PNG")
-                tmp_out = str(out_dir / f"{file_prefix}_{platform}_{size[0]}x{size[1]}.png")
-                res = _run_helper({
-                    "mode": "smart-crop", "inputPath": tmp_in,
-                    "targetWidth": size[0], "targetHeight": size[1], "outputPath": tmp_out,
-                })
-                if res.get("success") and Path(tmp_out).exists():
-                    platform_paths[platform] = tmp_out
-                    continue
-            cropped = _center_crop_resize(master_img, size)
+            else:
+                cropped = _center_crop_resize(master_img, size)
             dest = out_dir / f"{file_prefix}_{platform}_{size[0]}x{size[1]}.png"
             cropped.save(dest, "PNG")
             platform_paths[platform] = str(dest)
         except Exception as e:
             platform_paths[platform] = f"ERROR: {e}"
 
-    engine_used = "apple" if engine == "apple" and HELPER_BINARY.exists() else "pollinations"
     return _ok(
         str(master_path),
-        engine=engine_used,
+        engine="shortcuts",
+        style=style,
         platforms=platform_paths,
         platform_count=len(platforms),
     )
@@ -323,13 +248,11 @@ def generate_social_pack(
 def generate_bundle(
     prompt: str,
     bundle: str,
-    engine: str = "pollinations",
     style: str = "illustration",
     crop_mode: str = "center",
     output_dir: str | None = None,
     file_prefix: str = "bundle",
     absolute_path: str | None = None,
-    input_image: str | None = None,
 ) -> dict:
     """
     Generate images for a predefined bundle (e.g. "full_social", "blog_set").
@@ -338,28 +261,25 @@ def generate_bundle(
     Args:
         prompt: Image concept.
         bundle: Bundle name from list_bundles().
-        engine: "apple" or "pollinations".
-        style: Apple style.
-        crop_mode: "center", "letterbox", or "smart".
+        style: Image Playground style.
+        crop_mode: "center" or "letterbox".
         output_dir: Save folder.
         file_prefix: Filename prefix.
         absolute_path: Full file path for master image. ERROR if file exists.
-        input_image: Path to an existing image for Apple Image Playground input.
     """
     if bundle not in PLATFORM_BUNDLES:
-        return _fail(f"Unknown bundle '{bundle}'. Use list_bundles() to see available bundles.")
+        return _fail(f"Unknown bundle '{bundle}'. Use list_bundles().")
     return generate_social_pack(
         prompt=prompt, platforms=PLATFORM_BUNDLES[bundle],
-        engine=engine, style=style, crop_mode=crop_mode,
+        style=style, crop_mode=crop_mode,
         output_dir=output_dir, file_prefix=file_prefix,
-        absolute_path=absolute_path, input_image=input_image,
+        absolute_path=absolute_path,
     )
 
 
 @mcp.tool()
 def generate_batch(
     prompts: list[str],
-    engine: str = "pollinations",
     style: str = "illustration",
     platforms: list[str] | None = None,
     output_dir: str | None = None,
@@ -371,8 +291,7 @@ def generate_batch(
 
     Args:
         prompts: List of image concepts.
-        engine: "apple" or "pollinations".
-        style: Apple style.
+        style: Image Playground style.
         platforms: Optional platform presets to crop each to.
         output_dir: Save folder.
         prefix_template: Filename prefix. {index} is replaced with 0,1,2...
@@ -385,18 +304,13 @@ def generate_batch(
         prefix = prefix_template.replace("{index}", str(i))
         if platforms:
             gen = generate_social_pack(
-                prompt=prompt, platforms=platforms, engine=engine,
+                prompt=prompt, platforms=platforms,
                 style=style, output_dir=str(out_dir), file_prefix=prefix,
             )
-        elif engine == "apple" and HELPER_BINARY.exists():
-            gen = _run_helper({
-                "mode": "generate", "prompt": prompt, "style": style, "count": 1,
-                "outputDir": str(out_dir), "prefix": prefix,
-            })
         else:
             ts = datetime.now().strftime("%Y%m%d_%H%M%S")
             save = str(out_dir / f"{prefix}_{ts}.png")
-            gen = _generate_pollinations(prompt, 1024, 1024, output_path=save)
+            gen = _generate_image(prompt=prompt, style=style, output_path=save)
 
         results.append({"prompt": prompt, "result": gen})
 
@@ -691,10 +605,8 @@ def apply_filter(
     absolute_path: str | None = None,
 ) -> dict:
     """
-    Apply a visual filter to an image. Uses Swift helper for Apple-native filters,
-    or falls back to PIL-based filters.
-
-    Filters: blur, sharpen, brightness, contrast, saturation, sepia, noir.
+    Apply a visual filter to an image via PIL.
+    Available: blur, sharpen, brightness, contrast, saturation, sepia, noir.
 
     Args:
         image_path: Source image path.
@@ -711,15 +623,6 @@ def apply_filter(
     out = str(forced) if forced else (output_path or str(Path(image_path).with_suffix("").as_posix() + f"_{filter_name}.png"))
     Path(out).parent.mkdir(parents=True, exist_ok=True)
 
-    if HELPER_BINARY.exists():
-        result = _run_helper({
-            "mode": "apply-filter", "inputPath": image_path,
-            "filter": filter_name, "intensity": intensity, "outputPath": out,
-        })
-        if result.get("success"):
-            return result
-
-    # PIL fallback
     img = Image.open(image_path).convert("RGB")
     if filter_name == "blur":
         img = img.filter(ImageFilter.GaussianBlur(radius=intensity * 20))
@@ -746,7 +649,7 @@ def apply_filter(
         gray = img.convert("L").convert("RGB")
         img = Image.blend(img, gray, intensity)
     else:
-        return _fail(f"PIL fallback not available for '{filter_name}'. Compile Swift helper for more filters.")
+        return _fail(f"Unknown filter '{filter_name}'. Available: blur, sharpen, brightness, contrast, saturation, sepia, noir.")
 
     img.save(out, "PNG")
     return _ok(out, filter=filter_name, intensity=intensity)
@@ -766,9 +669,7 @@ def smart_crop(
     absolute_path: str | None = None,
 ) -> dict:
     """
-    Face-aware smart crop using Apple's Vision framework.
-    Detects faces and centers the crop on them instead of the image center.
-    Falls back to center crop if Swift helper is unavailable.
+    Crop an image to exact dimensions using center-crop.
 
     Args:
         image_path: Source image path.
@@ -788,35 +689,10 @@ def smart_crop(
     ))
     Path(out).parent.mkdir(parents=True, exist_ok=True)
 
-    if HELPER_BINARY.exists():
-        result = _run_helper({
-            "mode": "smart-crop", "inputPath": image_path,
-            "targetWidth": target_width, "targetHeight": target_height,
-            "outputPath": out,
-        })
-        if result.get("success"):
-            return result
-
-    # PIL fallback
     img = Image.open(image_path).convert("RGB")
     cropped = _center_crop_resize(img, (target_width, target_height))
     cropped.save(out, "PNG")
-    return _ok(out, method="center_fallback", width=target_width, height=target_height)
-
-
-@mcp.tool()
-def detect_faces(image_path: str) -> dict:
-    """
-    Detect faces in an image using Apple's Vision framework.
-    Returns face count and bounding boxes.
-    """
-    result = _run_helper({"mode": "detect-faces", "inputPath": image_path})
-    if result.get("success"):
-        result["next_steps"] = [
-            f"Found {result.get('faceCount', 0)} face(s)",
-            "Use smart_crop() to center-crop on detected faces",
-        ]
-    return result
+    return _ok(out, method="center_crop", width=target_width, height=target_height)
 
 
 @mcp.tool()

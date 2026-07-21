@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 /**
  * postinstall.js — Compile Swift helper + install Python deps
- * Runs automatically after `npm install @vakandi/apple-image-mcp`
+ * Runs automatically after `npm install mcp-apple-image-playground`
+ * or when invoked via `npx mcp-apple-image-playground`.
  */
 const { execSync } = require("child_process");
 const path = require("path");
@@ -19,16 +20,10 @@ function warn(msg) {
   console.warn(`\x1b[33m[mcp-apple-image-playground]\x1b[0m ${msg}`);
 }
 
-function fail(msg) {
-  console.error(`\x1b[31m[mcp-apple-image-playground]\x1b[0m ${msg}`);
-}
-
 // ── Step 1: Compile Swift helper ─────────────────────────────────────────────
 function compileSwift() {
-  if (!fs.existsSync(SWIFT_SRC)) {
-    warn("imagegen_helper.swift not found — skipping Swift compilation");
-    return false;
-  }
+  if (process.platform !== "darwin") return false;
+  if (!fs.existsSync(SWIFT_SRC)) return false;
 
   // Already compiled and up-to-date?
   if (fs.existsSync(SWIFT_BIN)) {
@@ -42,7 +37,6 @@ function compileSwift() {
 
   log("Compiling Swift helper (one-time, ~5s)...");
 
-  // Check for swiftc
   try {
     execSync("which swiftc", { stdio: "ignore" });
   } catch {
@@ -61,7 +55,7 @@ function compileSwift() {
     );
     log("Swift helper compiled ✓");
     return true;
-  } catch (e) {
+  } catch {
     warn(
       "Swift compilation failed — Apple Intelligence engine unavailable.\n" +
         "  This is expected on non-macOS or if Xcode CLI tools aren't installed.\n" +
@@ -73,9 +67,6 @@ function compileSwift() {
 
 // ── Step 2: Install Python dependencies ──────────────────────────────────────
 function installPythonDeps() {
-  log("Installing Python dependencies...");
-
-  // Find python3
   let python = "python3";
   try {
     execSync("which python3", { stdio: "ignore" });
@@ -84,33 +75,28 @@ function installPythonDeps() {
     return false;
   }
 
-  // Check version >= 3.10
   try {
-    const ver = execSync("python3 -c 'import sys; print(f\"{sys.version_info.major}.{sys.version_info.minor}\")'", {
-      encoding: "utf-8",
-    }).trim();
-    const [major, minor] = ver.split(".").map(Number);
-    if (major < 3 || (major === 3 && minor < 10)) {
-      warn(`Python ${ver} found but 3.10+ required. Pollinations may still work.`);
-    }
+    execSync(`${python} -c "import mcp; import PIL"`, { stdio: "ignore", timeout: 5000 });
+    log("Python dependencies already installed ✓");
+    return true;
   } catch {
-    // version check failed, continue anyway
   }
+
+  log("Installing Python dependencies...");
 
   const deps = ['"mcp[cli]"', "pillow"];
 
   try {
-    // Use --quiet to avoid noise, --no-warn-script-location for pipx users
-    execSync(`python3 -m pip install --quiet --no-warn-script-location ${deps.join(" ")}`, {
+    execSync(`${python} -m pip install --quiet --no-warn-script-location ${deps.join(" ")}`, {
       stdio: "inherit",
       timeout: 120_000,
     });
     log("Python dependencies installed ✓");
     return true;
-  } catch (e) {
+  } catch {
     warn(
       "pip install failed. Try manually:\n" +
-        "  python3 -m pip install 'mcp[cli]' pillow"
+        `  ${python} -m pip install "mcp[cli]" pillow`
     );
     return false;
   }
@@ -130,16 +116,15 @@ function main() {
   const swiftOk = compileSwift();
   installPythonDeps();
 
-  // Summary
   console.log("");
-  log("Setup complete! 🎉");
-  log("");
+  log("Setup complete!");
+  console.log("");
   log("Quick start:");
   log("  npx mcp-apple-image-playground");
-  log("");
+  console.log("");
   log("Or add to your MCP client config:");
-  log(`  "apple_image": { "command": "npx", "args": ["mcp-apple-image-playground"] }`);
-  log("");
+  log('  "apple_image": { "command": "npx", "args": ["mcp-apple-image-playground"] }');
+  console.log("");
 
   if (!swiftOk) {
     warn("Apple Intelligence engine unavailable. Pollinations engine works on any machine.");

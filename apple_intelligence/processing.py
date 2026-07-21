@@ -3,7 +3,6 @@ from pathlib import Path
 from PIL import Image, ImageDraw, ImageFont, ImageFilter
 
 from .response import _ok, _fail, _check_absolute_path, DEFAULT_OUTPUT_DIR
-from .engines import HELPER_BINARY, _run_helper
 
 
 # ═══════════════════════════════════════════════════════════════════════════════

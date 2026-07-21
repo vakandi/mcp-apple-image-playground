@@ -13,3 +13,4 @@ venv/
 *.egg-info/
 .momo
 node_modules/
+*.tgz

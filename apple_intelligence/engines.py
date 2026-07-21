@@ -1,194 +1,272 @@
-"""Apple Intelligence and Pollinations.ai image generation engines."""
+"""Apple Image Playground generation engine via compiled Swift binary."""
 import json
 import logging
 import os
 import subprocess
+import tempfile
 import time
-import urllib.parse
-import urllib.request
 import uuid
 from pathlib import Path
 
 from PIL import Image
-from io import BytesIO
 
 from .response import _fail, _ok
 
 logger = logging.getLogger("apple_intelligence")
 
-HELPER_BINARY = Path(__file__).parent.parent / "imagegen_helper"
-HANDSHAKE_DIR = Path("/tmp/com.communitymanager.imagegen-helper")
-APP_BUNDLE_DIR = HANDSHAKE_DIR / "ImageGenHelper.app"
+_BINARY_DIR = Path(__file__).resolve().parent.parent
+_BINARY_PATH = _BINARY_DIR / "imagegen_helper"
+
+_APP_BUNDLE_DIR = Path("/tmp/com.communitymanager.imagegen-helper")
+_APP_BUNDLE_PATH = _APP_BUNDLE_DIR / "ImageGenHelper.app"
+
+STYLE_MAP = {
+    "animation": "animation",
+    "illustration": "illustration",
+    "sketch": "sketch",
+    "emoji": "emoji",
+    "messages_background": "messages-background",
+}
+
+CHATGPT_STYLES = {
+    "oil_painting": "oil_painting",
+    "watercolor": "watercolor",
+    "vector": "vector",
+    "anime": "anime",
+    "print": "print",
+}
+
+AVAILABLE_STYLES = list(STYLE_MAP.keys())
+
+_POLL_INTERVAL = 0.5
 
 
-def _ensure_app_bundle():
-    """Create a macOS .app bundle wrapper so `open -a` can launch the helper."""
-    macos_dir = APP_BUNDLE_DIR / "Contents" / "MacOS"
-    macos_dir.mkdir(parents=True, exist_ok=True)
-    binary_dest = macos_dir / "imagegen_helper"
-    if binary_dest.exists() or binary_dest.is_symlink():
-        binary_dest.unlink()
-    binary_dest.symlink_to(HELPER_BINARY.resolve())
+def _ensure_app_bundle() -> bool:
+    """Create the .app bundle with a symlink to the compiled binary.
 
-    plist = APP_BUNDLE_DIR / "Contents" / "Info.plist"
-    plist.write_text(f"""<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-    <key>CFBundleIdentifier</key>
-    <string>com.communitymanager.imagegen-helper</string>
-    <key>CFBundleName</key>
-    <string>ImageGenHelper</string>
-    <key>CFBundleExecutable</key>
-    <string>imagegen_helper</string>
-    <key>CFBundlePackageType</key>
-    <string>APPL</string>
-    <key>LSUIElement</key>
-    <false/>
-</dict>
-</plist>""")
+    The .app bundle is required because ImagePlayground's ImageCreator needs
+    a proper GUI app context. Running the binary directly causes SIGSEGV.
+    Using `open -a` on the .app bundle gives it the foreground status it needs.
 
+    Returns True if the bundle is ready, False on error.
+    """
+    if not _BINARY_PATH.exists():
+        logger.error("Swift binary not found at %s — run: swiftc imagegen_helper.swift -o imagegen_helper "
+                     "-framework ImagePlayground -framework AppKit -framework Vision -framework CoreImage",
+                     _BINARY_PATH)
+        return False
 
-def _run_helper(payload: dict, timeout: int = 180) -> dict:
-    """Execute the Swift helper binary with the given payload."""
-    if not HELPER_BINARY.exists():
-        return _fail(
-            f"Swift helper not found at {HELPER_BINARY}. "
-            "Compile with: swiftc imagegen_helper.swift -o imagegen_helper "
-            "-framework ImagePlayground -framework AppKit -framework Vision -framework CoreImage"
+    macos_dir = _APP_BUNDLE_PATH / "Contents" / "MacOS"
+    try:
+        macos_dir.mkdir(parents=True, exist_ok=True)
+    except OSError as e:
+        logger.error("Failed to create .app bundle dirs: %s", e)
+        return False
+
+    binary_link = macos_dir / "imagegen_helper"
+    try:
+        if binary_link.exists() or binary_link.is_symlink():
+            binary_link.unlink()
+        binary_link.symlink_to(_BINARY_PATH.resolve())
+    except OSError as e:
+        logger.error("Failed to symlink binary into .app bundle: %s", e)
+        return False
+
+    plist_path = _APP_BUNDLE_PATH / "Contents" / "Info.plist"
+    if not plist_path.exists():
+        plist_path.write_text(
+            '<?xml version="1.0" encoding="UTF-8"?>\n'
+            '<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" '
+            '"http://www.apple.com/DTDs/PropertyList-1.0.dtd">\n'
+            '<plist version="1.0">\n<dict>\n'
+            '  <key>CFBundleIdentifier</key>\n'
+            '  <string>com.communitymanager.imagegen-helper</string>\n'
+            '  <key>CFBundleName</key>\n'
+            '  <string>ImageGenHelper</string>\n'
+            '  <key>CFBundleExecutable</key>\n'
+            '  <string>imagegen_helper</string>\n'
+            '  <key>CFBundlePackageType</key>\n'
+            '  <string>APPL</string>\n'
+            '  <key>LSUIElement</key>\n'
+            '  <false/>\n'
+            '</dict>\n</plist>\n',
+            encoding="utf-8",
         )
 
-    mode = payload.get("mode", "")
-    needs_foreground = mode in ("generate", "list-styles")
+    return True
 
-    if needs_foreground:
-        return _run_helper_foreground(payload, timeout)
+
+def _run_swift_helper(mode: str, env_overrides: dict | None = None, timeout: int = 120) -> dict:
+    """Launch the Swift helper via `open -a` and wait for its JSON response.
+
+    The helper writes a JSON response file to /tmp/com.communitymanager.imagegen-helper/resp_<uuid>.json.
+    We poll for it until it appears or we timeout.
+
+    Args:
+        mode: "list-styles" or "generate"
+        env_overrides: Additional env vars to pass (IMAGE_HELPER_PROMPT, etc.)
+        timeout: Max seconds to wait for the response file
+
+    Returns:
+        Parsed JSON dict from the helper, or an error dict.
+    """
+    if not _ensure_app_bundle():
+        return {"success": False, "error": f"Swift binary not found at {_BINARY_PATH}"}
+
+    response_id = uuid.uuid4().hex[:12]
+    response_path = _APP_BUNDLE_DIR / f"resp_{response_id}.json"
+
+    env = os.environ.copy()
+    env["IMAGE_HELPER_MODE"] = mode
+    env["IMAGE_HELPER_OUTPUT"] = str(response_path)
+    env["LANG"] = "en_US.UTF-8"
+    env["LC_ALL"] = "en_US.UTF-8"
+    if env_overrides:
+        env.update(env_overrides)
 
     try:
         proc = subprocess.run(
-            [str(HELPER_BINARY), json.dumps(payload)],
-            capture_output=True, text=True, timeout=timeout,
+            ["open", "-a", str(_APP_BUNDLE_PATH)],
+            stdin=subprocess.DEVNULL,
+            capture_output=True,
+            text=True,
+            timeout=10,
+            env=env,
         )
+        if proc.returncode != 0:
+            logger.warning("open -a returned %d: %s", proc.returncode, proc.stderr[:200])
     except subprocess.TimeoutExpired:
-        return _fail("Helper timed out after 180s.")
-    except FileNotFoundError:
-        return _fail(f"Cannot execute {HELPER_BINARY}.")
+        return {"success": False, "error": "open -a timed out after 10s"}
+    except Exception as e:
+        return {"success": False, "error": f"Failed to launch .app bundle: {e}"}
 
-    stdout = proc.stdout.strip()
-    if not stdout:
-        return _fail(f"No output from helper. stderr: {proc.stderr.strip()[:500]}")
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if response_path.exists():
+            try:
+                data = json.loads(response_path.read_text(encoding="utf-8"))
+                try:
+                    response_path.unlink()
+                except OSError:
+                    pass
+                return data
+            except (json.JSONDecodeError, OSError) as e:
+                logger.warning("Failed to read response file: %s", e)
+                break
+        time.sleep(_POLL_INTERVAL)
+
     try:
-        return json.loads(stdout.splitlines()[-1])
-    except json.JSONDecodeError:
-        return _fail(f"Bad JSON from helper: {stdout[:300]}")
-
-
-def _run_helper_foreground(payload: dict, timeout: int = 180) -> dict:
-    """Launch helper via `open -a` for foreground process status (required by Apple Image Playground)."""
-    HANDSHAKE_DIR.mkdir(parents=True, exist_ok=True)
-    _ensure_app_bundle()
-
-    # Force English locale
-    try:
-        subprocess.run(
-            ["defaults", "write", "com.communitymanager.imagegen-helper", "AppleLanguages", "-array", "en"],
-            capture_output=True, timeout=5,
-        )
-        subprocess.run(
-            ["defaults", "write", "com.communitymanager.imagegen-helper", "AppleLocale", "en_US"],
-            capture_output=True, timeout=5,
-        )
-    except Exception:
+        response_path.unlink()
+    except OSError:
         pass
+    return {"success": False, "error": f"Timed out waiting for {mode} response ({timeout}s)"}
 
-    request_id = uuid.uuid4().hex
-    output_path = HANDSHAKE_DIR / f"resp_{request_id}.json"
+
+def generate_image(
+    prompt: str,
+    style: str | None = None,
+    output_path: str | None = None,
+    timeout: int = 600,
+) -> dict:
+    if style and style in CHATGPT_STYLES:
+        return generate_chatgpt_image(prompt, style=style, output_path=output_path, timeout=timeout)
+
+    if output_path is None:
+        output_path = str(
+            Path(tempfile.gettempdir()) / f"imgplayground_{uuid.uuid4().hex[:8]}.png"
+        )
+
+    output_dir = str(Path(output_path).parent)
+    prefix = Path(output_path).stem.rsplit("_", 1)[0] if "_" in Path(output_path).stem else "aigen"
+
+    style_id = STYLE_MAP.get(style, "illustration") if style else "illustration"
 
     env = {
-        **dict(os.environ),
-        "IMAGE_HELPER_MODE": str(payload.get("mode", "generate")),
-        "IMAGE_HELPER_PROMPT": str(payload.get("prompt", "") or ""),
-        "IMAGE_HELPER_STYLE": str(payload.get("style", "illustration") or "illustration"),
-        "IMAGE_HELPER_COUNT": str(payload.get("count", 1) or 1),
-        "IMAGE_HELPER_DIR": str(payload.get("outputDir", "/tmp") or "/tmp"),
-        "IMAGE_HELPER_PREFIX": str(payload.get("prefix", "aigen") or "aigen"),
-        "IMAGE_HELPER_OUTPUT": str(output_path),
-        "IMAGE_HELPER_INPUT_IMAGE": str(payload.get("inputImage") or ""),
-        "LANG": "en_US.UTF-8",
-        "LC_ALL": "en_US.UTF-8",
+        "IMAGE_HELPER_PROMPT": prompt,
+        "IMAGE_HELPER_STYLE": style_id,
+        "IMAGE_HELPER_COUNT": "1",
+        "IMAGE_HELPER_DIR": output_dir,
+        "IMAGE_HELPER_PREFIX": prefix,
     }
-    # Sanitize: subprocess requires all env values to be strings, no None
-    env = {k: str(v) for k, v in env.items() if v is not None}
 
+    result = _run_swift_helper("generate", env_overrides=env, timeout=timeout)
+
+    if not result.get("success"):
+        return _fail(result.get("error", "Unknown generation error"))
+
+    images = result.get("images", [])
+    if not images:
+        return _fail("Generation succeeded but returned no images")
+
+    generated_path = images[0].get("path", "")
+    if not generated_path or not Path(generated_path).exists():
+        return _fail(f"Generated image not found at {generated_path}")
+
+    # If caller wanted a specific output path, copy/move there
+    dest = Path(output_path)
+    if generated_path != output_path:
+        import shutil
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(generated_path, str(dest))
+
+    size_bytes = dest.stat().st_size
     try:
-        cmd = ["open", "-a", str(APP_BUNDLE_DIR)]
-        proc = subprocess.Popen(
-            cmd,
-            env=env,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-        )
-    except Exception as e:
-        return _fail(f"Failed to launch app bundle: {e}")
-
-    deadline = time.time() + timeout
-    while time.time() < deadline:
-        if output_path.exists():
-            try:
-                data = json.loads(output_path.read_text())
-                output_path.unlink(missing_ok=True)
-                if data.get("success"):
-                    return data
-                else:
-                    return _fail(data.get("error", "Unknown helper error"))
-            except (json.JSONDecodeError, KeyError):
-                pass
-        time.sleep(0.5)
-
-    output_path.unlink(missing_ok=True)
-    return _fail(f"Foreground generation timed out after {timeout}s.")
-
-
-def _generate_pollinations(
-    prompt: str,
-    width: int = 1024,
-    height: int = 1024,
-    seed: int | None = None,
-    model: str = "flux",
-    output_path: str | None = None,
-) -> dict:
-    """Generate an image via Pollinations.ai (free, no API key)."""
-    params = {
-        "width": width, "height": height, "model": model,
-        "nologo": "true", "enhance": "true",
-    }
-    if seed is not None:
-        params["seed"] = seed
-
-    encoded_prompt = urllib.parse.quote(prompt)
-    query = urllib.parse.urlencode(params)
-    url = f"https://image.pollinations.ai/prompt/{encoded_prompt}?{query}"
-
-    try:
-        req = urllib.request.Request(url, headers={"User-Agent": "CommunityManagerMCP/2.0"})
-        with urllib.request.urlopen(req, timeout=120) as resp:
-            img_data = resp.read()
-    except Exception as e:
-        return _fail(f"Pollinations request failed: {e}")
-
-    if not img_data or len(img_data) < 1000:
-        return _fail(f"Empty or too-small response from Pollinations ({len(img_data)} bytes)")
-
-    if output_path:
-        Path(output_path).parent.mkdir(parents=True, exist_ok=True)
-        with open(output_path, "wb") as f:
-            f.write(img_data)
-
-    try:
-        img = Image.open(BytesIO(img_data))
+        img = Image.open(str(dest))
         return _ok(
-            output_path or "pollinations_output",
-            width=img.width, height=img.height, size_bytes=len(img_data),
+            str(dest),
+            width=img.width, height=img.height, size_bytes=size_bytes,
+            style=style or "default",
         )
     except Exception:
-        return _ok(output_path or "pollinations_output", size_bytes=len(img_data))
+        return _ok(str(dest), size_bytes=size_bytes)
+
+
+def generate_chatgpt_image(
+    prompt: str,
+    style: str = "oil_painting",
+    output_path: str | None = None,
+    timeout: int = 120,
+) -> dict:
+    if output_path is None:
+        output_path = str(
+            Path(tempfile.gettempdir()) / f"chatgpt_{uuid.uuid4().hex[:8]}.png"
+        )
+
+    output_dir = str(Path(output_path).parent)
+    prefix = Path(output_path).stem.rsplit("_", 1)[0] if "_" in Path(output_path).stem else "chatgpt"
+
+    env = {
+        "IMAGE_HELPER_PROMPT": prompt,
+        "IMAGE_HELPER_DIR": output_dir,
+        "IMAGE_HELPER_PREFIX": prefix,
+    }
+
+    result = _run_swift_helper("generate-chatgpt", env_overrides=env, timeout=timeout)
+
+    if not result.get("success"):
+        return _fail(result.get("error", "ChatGPT generation error"))
+
+    images = result.get("images", [])
+    if not images:
+        return _fail("ChatGPT generation succeeded but returned no images")
+
+    generated_path = images[0].get("path", "")
+    if not generated_path or not Path(generated_path).exists():
+        return _fail(f"Generated image not found at {generated_path}")
+
+    dest = Path(output_path)
+    if generated_path != output_path:
+        import shutil
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(generated_path, str(dest))
+
+    size_bytes = dest.stat().st_size
+    try:
+        img = Image.open(str(dest))
+        return _ok(
+            str(dest),
+            width=img.width, height=img.height, size_bytes=size_bytes,
+            style=style,
+        )
+    except Exception:
+        return _ok(str(dest), size_bytes=size_bytes)
