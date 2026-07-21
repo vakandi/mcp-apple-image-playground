@@ -44,6 +44,7 @@
     "apple_intelligence/",
     "!apple_intelligence/__pycache__/",
     "apple_intelligence_community_manager.py",
+    "google99b658fc92105951.html",
     "README.md",
     "LICENSE"
   ],
