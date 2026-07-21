@@ -3,8 +3,8 @@
 </p>
 
 <p align="center">
-  <strong>On-device AI image generation for macOS. 16 tools. Zero API keys.</strong><br>
-  Apple Intelligence (<code>ImagePlayground</code>) + ChatGPT external styles via Shortcuts.app.<br>
+  <strong>AI image generation for macOS via Image Playground. 17 tools. Zero API keys.</strong><br>
+  On-device styles (animation, illustration, sketch) + ChatGPT external styles (oil painting, watercolor, vector, anime, print).<br>
   Auto-crops for 40+ social media platforms. Built for AI agents.
 </p>
 
@@ -24,8 +24,8 @@ Other Apple Intelligence MCP servers expose one tool: `generate_image`. That's i
 
 **apple-image-mcp** gives your AI agent a full image pipeline:
 
-- **8 styles** — on-device (animation, illustration, sketch) + ChatGPT external (oil painting, watercolor, vector, anime, print)
-- **16 tools** — generate, crop, batch, watermark, text overlay, filters, social packs
+- **8 styles** — on-device (animation, illustration, sketch, emoji) + ChatGPT external (oil painting, watercolor, vector, anime, print) via Shortcuts.app
+- **17 tools** — generate, crop, batch, watermark, text overlay, filters, social packs
 - **40+ platform presets** — Instagram, TikTok, LinkedIn, YouTube, Pinterest, blog headers — all one prompt away
 - **Zero config** — runs locally on any Apple Silicon Mac with Apple Intelligence enabled
 
@@ -155,9 +155,9 @@ claude mcp add apple_image \
 
 ## Engine Details
 
-### Apple Intelligence (On-Device)
+### On-Device (Apple Intelligence)
 
-- **Styles**: `animation`, `illustration`, `sketch`
+- **Styles**: `animation`, `illustration`, `sketch`, `emoji`
 - **Requires**: macOS 15.4+ with Apple Intelligence enabled, Apple Silicon Mac
 - **Privacy**: Runs entirely on your machine. No images leave your device.
 - **Speed**: ~5-10 seconds per image
@@ -166,7 +166,7 @@ claude mcp add apple_image \
 
 - **Styles**: `oil_painting`, `watercolor`, `vector`, `anime`, `print`
 - **Requires**: Internet connection, ChatGPT integrated into Siri
-- **Privacy**: Prompt sent to OpenAI. Image returned via Shortcuts.app.
+- **How it works**: Routes through Siri's ChatGPT integration via Shortcuts.app
 - **Speed**: ~10-30 seconds per image (network dependent)
 
 ---
@@ -306,14 +306,18 @@ ChatGPT external styles (oil_painting, watercolor, vector, anime, print) require
 │   OpenCode, etc.)│     │                          │     │                 │
 └──────────────────┘     └──────────────────────────┘     ├─ Shortcuts.app │
                                                           │  (on-device)   │
+                                                          │  styles:       │
+                                                          │  animation,    │
+                                                          │  illustration, │
+                                                          │  sketch, emoji │
+                                                          │                │
                                                           ├─ ChatGPT       │
                                                           │  (external)    │
-                                                          ├─ Pollinations  │
-                                                          │  (cloud, free) │
+                                                          │  via Siri      │
                                                           └─────────────────┘
 ```
 
-The Node.js launcher handles Python dependency management and Swift compilation automatically. The Python server exposes 16 MCP tools via stdio transport. On-device styles use Apple's Image Playground. Cloud styles use Pollinations.ai (free, no API key).
+The Node.js launcher handles Python dependency management and Swift compilation automatically. The Python server exposes 17 MCP tools via stdio transport. All image generation goes through Shortcuts.app's GenerateImageIntent — on-device styles use Apple's Image Playground directly, external styles route through Siri's ChatGPT integration.
 
 ---
 

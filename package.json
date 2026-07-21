@@ -1,15 +1,15 @@
 {
   "name": "mcp-apple-image-playground",
   "version": "1.1.2",
-  "description": "AI image generation MCP server — Apple Intelligence (on-device) + Pollinations.ai (cloud). 17 tools, 40+ social presets, zero API keys. Plug-and-play for Claude Desktop, Cursor, OpenCode.",
+  "description": "AI image generation MCP server via Apple Image Playground — on-device styles (animation, illustration, sketch) + ChatGPT external styles (oil painting, watercolor, vector, anime, print). 17 tools, 40+ social presets, zero API keys. Plug-and-play for Claude Desktop, Cursor, OpenCode.",
   "keywords": [
     "mcp",
     "model-context-protocol",
     "apple-intelligence",
+    "apple-image-playground",
     "image-generation",
     "ai",
     "macos",
-    "pollinations",
     "social-media",
     "content-creation",
     "fastmcp",

@@ -42,7 +42,7 @@ function compileSwift() {
   } catch {
     warn(
       "swiftc not found. Install Xcode CLI tools: xcode-select --install\n" +
-        "Apple Intelligence engine will be unavailable — Pollinations still works."
+        "Apple Intelligence on-device styles unavailable."
     );
     return false;
   }
@@ -59,7 +59,7 @@ function compileSwift() {
     warn(
       "Swift compilation failed — Apple Intelligence engine unavailable.\n" +
         "  This is expected on non-macOS or if Xcode CLI tools aren't installed.\n" +
-        "  Pollinations engine still works fine."
+        "  Apple Intelligence on-device styles unavailable."
     );
     return false;
   }
@@ -104,9 +104,9 @@ function installPythonDeps() {
 
 // ── Main ─────────────────────────────────────────────────────────────────────
 function main() {
-  // Skip on non-macOS (Pollinations-only mode)
+  // Non-macOS: Apple Image Playground unavailable
   if (process.platform !== "darwin") {
-    warn("Not macOS — Apple Intelligence unavailable. Pollinations engine still works.");
+    warn("Not macOS — Apple Image Playground requires macOS with Apple Intelligence.");
     installPythonDeps();
     return;
   }
@@ -125,10 +125,6 @@ function main() {
   log("Or add to your MCP client config:");
   log('  "apple_image": { "command": "npx", "args": ["mcp-apple-image-playground"] }');
   console.log("");
-
-  if (!swiftOk) {
-    warn("Apple Intelligence engine unavailable. Pollinations engine works on any machine.");
-  }
 }
 
 main();

@@ -66,7 +66,7 @@ function compileSwift() {
   try {
     execSync("which swiftc", { stdio: "ignore", timeout: 3000 });
   } catch {
-    warn("swiftc not found — Apple Intelligence engine unavailable. Pollinations works.");
+    warn("swiftc not found — Apple Intelligence on-device styles unavailable.");
     return;
   }
 
